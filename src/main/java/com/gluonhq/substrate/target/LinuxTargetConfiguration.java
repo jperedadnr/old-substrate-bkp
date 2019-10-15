@@ -37,9 +37,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -56,31 +53,7 @@ public class LinuxTargetConfiguration extends AbstractTargetConfiguration {
         return List.of();
     }
 
-    @Override
-    String getAdditionalSourceFileLocation() {
-        return "/native/linux/";
-    }
 
-    @Override
-    List<String> getAdditionalSourceFiles() {
-        return Arrays.asList("launcher.c", "thread.c");
-    }
-
-    @Override
-    List<String> getTargetLibraries() {
-        return Arrays.asList("java", "jvm",
-                "libchelper", "nio", "zip", "net", "pthread", "z", "dl");
-    }
-
-    @Override
-    List<String> getTargetCompileAdditionalSourcesArgs() {
-        return new ArrayList<>(Arrays.asList("gcc", "-c"));
-    }
-
-    @Override
-    List<String> getTargetLinkArgs() {
-        return new ArrayList<>(Arrays.asList("gcc", "-o"));
-    }
 
     private boolean checkLinker() throws IOException, InterruptedException {
         ProcessBuilder linker = new ProcessBuilder("gcc");

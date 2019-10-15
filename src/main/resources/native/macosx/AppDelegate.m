@@ -25,10 +25,13 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#import "AppDelegate.h"
+#import <Cocoa/Cocoa.h>
 #include <pthread.h>
 
 extern void *IsolateEnterStub__JavaMainWrapper__run__5087f5482cc9a6abc971913ece43acb471d2631b__a61fe6c26e84dd4037e4629852b5488bfcc16e7e();
+
+@interface AppDelegate : NSObject <NSApplicationDelegate>
+@end
 
 @interface AppDelegate ()
 @end
