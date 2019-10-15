@@ -39,12 +39,22 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 
 public abstract class AbstractTargetConfiguration implements TargetConfiguration {
 
+    //  static String[] C_RESOURCES = { "launcher.c",  "thread.c"};
+    ProjectConfiguration projectConfiguration;
+    ProcessPaths paths;
+
+    private List<String> defaultAdditionalSourceFiles = Arrays.asList("launcher.c", "thread.c");
+
     @Override
     public boolean compile(ProcessPaths paths, ProjectConfiguration config, String cp) throws IOException, InterruptedException {
+        this.projectConfiguration = config;
         Triplet target =  config.getTargetTriplet();
         String jniPlatform = getJniPlatform(target.getOs());
         if (!compileAdditionalSources(paths, config) ) {
@@ -65,6 +75,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         compileBuilder.command().add("-H:+ExitAfterRelocatableImageWrite");
         compileBuilder.command().add("-H:TempDirectory="+tmpDir);
         compileBuilder.command().add("-H:+SharedLibrary");
+        compileBuilder.command().addAll(getTargetSpecificAOTCompileFlags());
         compileBuilder.command().add("-Dsvm.platform=org.graalvm.nativeimage.Platform$"+jniPlatform);
         compileBuilder.command().add("-cp");
         compileBuilder.command().add(cp);
@@ -72,6 +83,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         compileBuilder.redirectErrorStream(true);
         Process compileProcess = compileBuilder.start();
         InputStream inputStream = compileProcess.getInputStream();
+        asynPrintFromInputStream(inputStream);
         int result = compileProcess.waitFor();
         // we will print the output of the process only if we don't have the resulting objectfile
 
@@ -96,14 +108,25 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return !failure;
     }
 
+    private String getJniPlatform( String os ) {
+        switch (os) {
+            case Constants.OS_LINUX: return "LINUX_AMD64";
+            case Constants.OS_IOS:return "DARWIN_AARCH64";
+            case Constants.OS_DARWIN: return "DARWIN_AMD64";
+            default: throw new IllegalArgumentException("No support yet for " + os);
+        }
+    }
+
     @Override
     public boolean link(ProcessPaths paths, ProjectConfiguration projectConfiguration) throws IOException, InterruptedException {
+
         if ( !Files.exists(projectConfiguration.getJavaStaticLibsPath())) {
             System.err.println("We can't link because the static Java libraries are missing. " +
                     "The path "+ projectConfiguration.getJavaStaticLibsPath() + " does not exist.");
             return false;
         }
 
+        this.paths = paths;
         String appName = projectConfiguration.getAppName();
         String objectFilename = projectConfiguration.getMainClassName().toLowerCase()+".o";
         Triplet target = projectConfiguration.getTargetTriplet();
@@ -113,38 +136,47 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
             throw new IllegalArgumentException("Linking failed, since there is no objectfile named "+objectFilename+" under "
                     +gvmPath.toString());
         }
-        ProcessBuilder linkBuilder = new ProcessBuilder(getTargetLinkArgs());
+        ProcessBuilder linkBuilder = new ProcessBuilder(getLinker());
         Path appPath = gvmPath.resolve(appName);
+
+        linkBuilder.command().add("-o");
         linkBuilder.command().add(paths.getAppPath().resolve(appName).toString());
 
-        getAdditionalSourceFiles().stream()
-                .filter(r -> ! r.endsWith(".h"))
-                .forEach(r -> linkBuilder.command().add(
+        getAdditionalSourceFiles()
+                .forEach( r -> linkBuilder.command().add(
                         appPath.resolve(r.replaceAll("\\..*", ".o")).toString()));
 
+
         linkBuilder.command().add(objectFile.toString());
+        linkBuilder.command().addAll(getTargetSpecificObjectFiles());
         linkBuilder.command().add("-L" + projectConfiguration.getJavaStaticLibsPath());
         linkBuilder.command().add("-L"+ Path.of(projectConfiguration.getGraalPath(), "lib", "svm", "clibraries", target.getOsArch2())); // darwin-amd64");
-        getTargetLibraries().forEach(lib -> linkBuilder.command().add("-l" + lib));
+        linkBuilder.command().add("-ljava");
+        linkBuilder.command().add("-ljvm");
+        linkBuilder.command().add("-llibchelper");
+        linkBuilder.command().add("-lnio");
+        linkBuilder.command().add("-lzip");
+        linkBuilder.command().add("-lnet");
+        linkBuilder.command().add("-lpthread");
+        linkBuilder.command().add("-lz");
+        linkBuilder.command().add("-ldl");
         linkBuilder.command().addAll(getTargetSpecificLinkFlags());
         linkBuilder.redirectErrorStream(true);
+        String cmds = String.join(" ", linkBuilder.command());
+        System.err.println("cmd = "+cmds);
         Process compileProcess = linkBuilder.start();
+        System.err.println("started linking");
         int result = compileProcess.waitFor();
+        System.err.println("done linking");
         if (result != 0 ) {
             System.err.println("Linking failed. Details from linking below:");
+            System.err.println("Command was: "+cmds);
             printFromInputStream(compileProcess.getInputStream());
             return false;
         }
         return true;
     }
 
-    private String getJniPlatform( String os ) {
-        switch (os) {
-            case Constants.OS_LINUX: return "LINUX_AMD64";
-            case Constants.OS_DARWIN: return "DARWIN_AMD64";
-            default: throw new IllegalArgumentException("No support yet for " + os);
-        }
-    }
 
     private void asynPrintFromInputStream (InputStream inputStream) {
         Thread t = new Thread(() -> {
@@ -157,7 +189,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         t.start();
     }
 
-    void printFromInputStream(InputStream inputStream) throws IOException {
+    private void printFromInputStream(InputStream inputStream) throws IOException {
         BufferedReader br = new BufferedReader(new InputStreamReader(inputStream));
         String l = br.readLine();
         while (l != null) {
@@ -178,25 +210,24 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return runBuilder.start();
     }
 
-    boolean compileAdditionalSources(ProcessPaths paths, ProjectConfiguration projectConfiguration)
+    public boolean compileAdditionalSources(ProcessPaths paths, ProjectConfiguration projectConfiguration)
             throws IOException, InterruptedException {
 
         String appName = projectConfiguration.getAppName();
         Path workDir = paths.getGvmPath().resolve(appName);
         Files.createDirectories(workDir);
 
-        ProcessBuilder processBuilder = new ProcessBuilder(getTargetCompileAdditionalSourcesArgs());
+        ProcessBuilder processBuilder = new ProcessBuilder(getCompiler());
+        processBuilder.command().add("-c");
         if (projectConfiguration.isVerbose()) {
             processBuilder.command().add("-DGVM_VERBOSE");
         }
-
-        for (String fileName : getAdditionalSourceFiles()) {
-            FileOps.copyResource(getAdditionalSourceFileLocation() + fileName, workDir.resolve(fileName));
-            if (! fileName.endsWith(".h")) {
-                processBuilder.command().add(fileName);
-            }
+        processBuilder.command().addAll(getTargetSpecificCCompileFlags());
+        for( String fileName: getAdditionalSourceFiles() ) {
+            FileOps.copyResource(getAdditionalSourceFileLocation()  + fileName, workDir.resolve(fileName));
+            processBuilder.command().add(fileName);
         }
-
+        processBuilder.command().addAll(getTargetSpecificCCompileFlags());
         processBuilder.directory(workDir.toFile());
         String cmds = String.join(" ", processBuilder.command());
         processBuilder.redirectErrorStream(true);
@@ -204,6 +235,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         int result = p.waitFor();
         if (result != 0) {
             System.err.println("Compilation of additional sources failed with result = " + result);
+            System.err.println("Original command was "+cmds);
             printFromInputStream(p.getInputStream());
             return false;
         } // we need more checks (e.g. do launcher.o and thread.o exist?)
@@ -215,6 +247,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         Process runProcess = startAppProcess(appPath,appName);
         return runProcess.getInputStream();
     }
+
 
     @Override
     public boolean runUntilEnd(Path appPath, String appName) throws IOException, InterruptedException {
@@ -229,16 +262,39 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return true;
     }
 
-    abstract List<String> getTargetSpecificLinkFlags();
+    // Default settings below, can be overridden by subclasses
 
-    abstract String getAdditionalSourceFileLocation();
+    String getAdditionalSourceFileLocation() {
+        return "/native/linux/";
+    }
 
-    abstract List<String> getAdditionalSourceFiles();
 
-    abstract List<String> getTargetLibraries();
+    List<String> getAdditionalSourceFiles() {
+        return defaultAdditionalSourceFiles;
+    }
 
-    abstract List<String> getTargetCompileAdditionalSourcesArgs();
+    String getCompiler() {
+        return "gcc";
+    }
 
-    abstract List<String> getTargetLinkArgs();
+    String getLinker() {
+        return "gcc";
+    }
+
+    List<String> getTargetSpecificLinkFlags() {
+        return Collections.emptyList();
+    }
+
+    List<String> getTargetSpecificCCompileFlags() {
+        return Collections.emptyList();
+    }
+
+    List<String> getTargetSpecificAOTCompileFlags() {
+        return Collections.emptyList();
+    }
+
+    List<String> getTargetSpecificObjectFiles() throws IOException {
+        return Collections.emptyList();
+    }
 
 }
