@@ -39,12 +39,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
 
 public abstract class AbstractTargetConfiguration implements TargetConfiguration {
-
-    private static String[] C_RESOURCES = { "launcher",  "thread"};
 
     @Override
     public boolean compile(ProcessPaths paths, ProjectConfiguration config, String cp) throws IOException, InterruptedException {
@@ -99,17 +96,8 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return !failure;
     }
 
-    private String getJniPlatform( String os ) {
-        switch (os) {
-            case Constants.OS_LINUX: return "LINUX_AMD64";
-            case Constants.OS_DARWIN: return "DARWIN_AMD64";
-            default: throw new IllegalArgumentException("No support yet for " + os);
-        }
-    }
-
     @Override
     public boolean link(ProcessPaths paths, ProjectConfiguration projectConfiguration) throws IOException, InterruptedException {
-
         if ( !Files.exists(projectConfiguration.getJavaStaticLibsPath())) {
             System.err.println("We can't link because the static Java libraries are missing. " +
                     "The path "+ projectConfiguration.getJavaStaticLibsPath() + " does not exist.");
@@ -125,27 +113,19 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
             throw new IllegalArgumentException("Linking failed, since there is no objectfile named "+objectFilename+" under "
                     +gvmPath.toString());
         }
-        ProcessBuilder linkBuilder = new ProcessBuilder("gcc");
+        ProcessBuilder linkBuilder = new ProcessBuilder(getTargetLinkArgs());
         Path appPath = gvmPath.resolve(appName);
-
-        linkBuilder.command().add("-o");
         linkBuilder.command().add(paths.getAppPath().resolve(appName).toString());
 
-        Arrays.stream(C_RESOURCES)
-              .forEach( r -> linkBuilder.command().add(appPath.resolve(r + ".o").toString()));
+        getAdditionalSourceFiles().stream()
+                .filter(r -> ! r.endsWith(".h"))
+                .forEach(r -> linkBuilder.command().add(
+                        appPath.resolve(r.replaceAll("\\..*", ".o")).toString()));
 
         linkBuilder.command().add(objectFile.toString());
         linkBuilder.command().add("-L" + projectConfiguration.getJavaStaticLibsPath());
         linkBuilder.command().add("-L"+ Path.of(projectConfiguration.getGraalPath(), "lib", "svm", "clibraries", target.getOsArch2())); // darwin-amd64");
-        linkBuilder.command().add("-ljava");
-        linkBuilder.command().add("-ljvm");
-        linkBuilder.command().add("-llibchelper");
-        linkBuilder.command().add("-lnio");
-        linkBuilder.command().add("-lzip");
-        linkBuilder.command().add("-lnet");
-        linkBuilder.command().add("-lpthread");
-        linkBuilder.command().add("-lz");
-        linkBuilder.command().add("-ldl");
+        getTargetLibraries().forEach(lib -> linkBuilder.command().add("-l" + lib));
         linkBuilder.command().addAll(getTargetSpecificLinkFlags());
         linkBuilder.redirectErrorStream(true);
         Process compileProcess = linkBuilder.start();
@@ -158,7 +138,13 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return true;
     }
 
-    abstract List<String> getTargetSpecificLinkFlags();
+    private String getJniPlatform( String os ) {
+        switch (os) {
+            case Constants.OS_LINUX: return "LINUX_AMD64";
+            case Constants.OS_DARWIN: return "DARWIN_AMD64";
+            default: throw new IllegalArgumentException("No support yet for " + os);
+        }
+    }
 
     private void asynPrintFromInputStream (InputStream inputStream) {
         Thread t = new Thread(() -> {
@@ -171,7 +157,7 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         t.start();
     }
 
-    private void printFromInputStream(InputStream inputStream) throws IOException {
+    void printFromInputStream(InputStream inputStream) throws IOException {
         BufferedReader br = new BufferedReader(new InputStreamReader(inputStream));
         String l = br.readLine();
         while (l != null) {
@@ -192,23 +178,23 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return runBuilder.start();
     }
 
-    public boolean compileAdditionalSources(ProcessPaths paths, ProjectConfiguration projectConfiguration)
+    boolean compileAdditionalSources(ProcessPaths paths, ProjectConfiguration projectConfiguration)
             throws IOException, InterruptedException {
 
         String appName = projectConfiguration.getAppName();
         Path workDir = paths.getGvmPath().resolve(appName);
         Files.createDirectories(workDir);
 
-        ProcessBuilder processBuilder = new ProcessBuilder("gcc");
-        processBuilder.command().add("-c");
+        ProcessBuilder processBuilder = new ProcessBuilder(getTargetCompileAdditionalSourcesArgs());
         if (projectConfiguration.isVerbose()) {
             processBuilder.command().add("-DGVM_VERBOSE");
         }
 
-        for( String res: C_RESOURCES ) {
-            String fileName = res + ".c";
-            FileOps.copyResource("/native/linux/" + fileName, workDir.resolve(fileName));
-            processBuilder.command().add(fileName);
+        for (String fileName : getAdditionalSourceFiles()) {
+            FileOps.copyResource(getAdditionalSourceFileLocation() + fileName, workDir.resolve(fileName));
+            if (! fileName.endsWith(".h")) {
+                processBuilder.command().add(fileName);
+            }
         }
 
         processBuilder.directory(workDir.toFile());
@@ -230,7 +216,6 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         return runProcess.getInputStream();
     }
 
-
     @Override
     public boolean runUntilEnd(Path appPath, String appName) throws IOException, InterruptedException {
         Process runProcess = startAppProcess(appPath,appName);
@@ -243,5 +228,17 @@ public abstract class AbstractTargetConfiguration implements TargetConfiguration
         }
         return true;
     }
+
+    abstract List<String> getTargetSpecificLinkFlags();
+
+    abstract String getAdditionalSourceFileLocation();
+
+    abstract List<String> getAdditionalSourceFiles();
+
+    abstract List<String> getTargetLibraries();
+
+    abstract List<String> getTargetCompileAdditionalSourcesArgs();
+
+    abstract List<String> getTargetLinkArgs();
 
 }

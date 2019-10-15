@@ -25,50 +25,16 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package com.gluonhq.substrate.target;
+#include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
 
-import com.gluonhq.substrate.Constants;
-import com.gluonhq.substrate.util.XcodeUtils;
+extern void outBox(int argc, char** argv);
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-public class DarwinTargetConfiguration extends AbstractTargetConfiguration {
-
-    @Override
-    String getAdditionalSourceFileLocation() {
-        return "/native/macosx/";
-    }
-
-    @Override
-    List<String> getAdditionalSourceFiles() {
-        return Arrays.asList("AppDelegate.m", "AppDelegate.h", "launcher.c");
-    }
-
-    @Override
-    List<String> getTargetLibraries() {
-        return Arrays.asList("java", "jvm",
-                "libchelper", "nio", "zip", "net", "pthread", "z", "dl");
-    }
-
-    @Override
-    List<String> getTargetCompileAdditionalSourcesArgs() {
-        return new ArrayList<>(Arrays.asList("clang", "-c", "-isysroot", XcodeUtils.SDKS.MACOSX.getSDKPath()));
-    }
-
-    @Override
-    List<String> getTargetLinkArgs() {
-        String sdkPath = XcodeUtils.SDKS.MACOSX.getSDKPath();
-        return new ArrayList<>(Arrays.asList("gcc", "-ObjC", "-isysroot", sdkPath,
-                "-iframework" + sdkPath + "/System/Library/Frameworks",
-                "-arch", Constants.ARCH_AMD64,
-                "-o"));
-    }
-
-    @Override
-    List<String> getTargetSpecificLinkFlags() {
-        return Arrays.asList("-Wl,-framework,Foundation", "-Wl,-framework,AppKit");
-    }
-
+int main(int argc, char** argv) {
+    #ifdef GVM_VERBOSE
+      fprintf(stderr, "Hello, JAVA main, argc = %d, argv = %p\n", argc, argv);
+    #endif
+    outBox(argc, argv);
 }
+
